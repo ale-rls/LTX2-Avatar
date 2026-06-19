@@ -60,9 +60,11 @@ and through an SSH tunnel. Same decision as FluxRT, for the same reason.
 | `brain.py` | GPU box (calls out) | swappable LLM brain (OpenAI / Anthropic / OpenAI-compatible) |
 | `comfy_client.py` | GPU box | ComfyUI websocket+HTTP client; queue, progress, fetch mp4 |
 | `workflow_adapter.py` | GPU box | patches the live values onto the exact workflow node IDs |
-| `td_avatar_ext.py` | TouchDesigner | extension: mic out, receive clip, drive Movie File In TOP |
-| `ws_callbacks.py` | TouchDesigner | WebSocket DAT callbacks → extension |
+| `launch.sh` | GPU box | sets env vars, starts ComfyUI, waits for ready, starts server.py |
 | `setup.sh` | GPU box | installs ComfyUI + the exact custom nodes + model checklist |
+| `td_avatar_ext.py` | TouchDesigner | extension: ParameterManager, mic streaming, clip playback |
+| `ws_callbacks.py` | TouchDesigner | Web Server DAT callbacks → extension |
+| `param_exec_callbacks.py` | TouchDesigner | Parameter Execute DAT callbacks → extension |
 
 ---
 
@@ -110,20 +112,34 @@ and through an SSH tunnel. Same decision as FluxRT, for the same reason.
 
 ## Setup (TouchDesigner)
 
+**Transport note — no WebSocket DAT (FluxRT lesson carried over):**
+The extension uses a **Web Server DAT + Web Render TOP** with an embedded relay
+HTML page, exactly like the FluxRT-TD-TCP project. The relay page's JavaScript
+owns the real WebSocket to the GPU server. TD's Python never touches the remote
+socket directly. This is what works reliably on RunPod TCP-only networking.
+
 Build a **Base COMP** containing:
 
-- a **Text DAT** `AvatarExt_logic` ← paste `td_avatar_ext.py`
-- a **Text DAT** `ws_callbacks` ← paste `ws_callbacks.py`
-- a **WebSocket DAT** `ws`
-  - Callbacks DAT = `ws_callbacks`
-  - Network Address = your `ws://…proxy.runpod.net` or `ws://127.0.0.1:8080`
-    (**127.0.0.1, never `localhost`** — IPv6 ::1 gotcha)
-- a mic input → **Audio Device In CHOP** → **Resample CHOP** (16000) → keep one
-  channel → name the final CHOP `mic_out`
-- a **CHOP Execute DAT** on `mic_out` → in `onValueChange`/`whileOn` call
-  `parent().ext.AvatarExt.OnAudioCook()`  ← **nothing streams without this**
-- a **Movie File In TOP** `avatar_player` (this displays the avatar)
-- a **Parameter Execute DAT** to forward custom-par pulses (Connect/Reset/EndTurn)
+| Operator | Type | Notes |
+|---|---|---|
+| `AvatarExt_logic` | Text DAT | paste `td_avatar_ext.py` |
+| `webserver_cbs` | Text DAT | paste `ws_callbacks.py`; set as Callbacks DAT on `web_server` |
+| `param_exec_cbs` | Text DAT | paste `param_exec_callbacks.py`; set as Callbacks DAT on `param_exec` |
+| `web_server` | Web Server DAT | Callbacks DAT = `webserver_cbs`; leave port blank (set by ext) |
+| `web_render` | Web Render TOP | URL left blank; ext fills it on Connect. Can be small/hidden. |
+| `param_exec` | Parameter Execute DAT | Callbacks DAT = `param_exec_cbs`; enable Custom + Value Change + Pulse |
+| `mic_out` | CHOP | Audio Device In → Resample CHOP (16000 Hz, 1 channel) → named `mic_out` |
+| `avatar_player` | Movie File In TOP | displays rendered clips |
+
+**Wiring:**
+- Create an **Execute DAT** inside the COMP, enable **Frame Start**:
+  ```python
+  def onFrameStart(frame):
+      parent().ext.AvatarExt.OnAudioCook()
+  ```
+  ← **nothing streams without this** (no CHOP wiring needed — reads `mic_out` directly each frame)
+- `param_exec` Parameter Execute DAT is wired automatically by the extension on init.
+  Its Callbacks DAT (`param_exec_cbs`) routes pulses and value changes to the extension.
 
 **Extension naming — must agree in three places (FluxRT lesson):**
 - class `AvatarExt`
@@ -132,11 +148,10 @@ Build a **Base COMP** containing:
 
 **Custom pars on the COMP:** `Connect`(pulse) `Address`(str) `Character`(str)
 `Voiceref`(str) `Charimage`(str) `Clipw`/`Cliph`(int) `Cliplen`(int)
-`Fastmode`(toggle) `Pushtotalk`(toggle) plus read-only `Status`/`Heard`/`Reply`
-strings for monitoring.
+`Fastmode`(toggle) `Pushtotalk`(toggle) plus read-only `Status`/`Heard`/`Reply`.
 
-Press **Connect**, speak, stop — after the pause the clip appears in
-`avatar_player`.
+Set `Address` to your server's WebSocket URL, press **Connect**, speak, stop —
+after the thinking pause the clip appears in `avatar_player`.
 
 ---
 
@@ -227,4 +242,3 @@ under your acceptable pause, or whether you also need a bigger card.
 - **24 GB (4090) is below the floor for the authored path.** fp8-22B (~22 GB) alone
   nearly fills it; with fp8 Gemma it won't co-reside. Use the GGUF path on ≤32 GB, or
   a bigger card for the fp8/bf16 path.
-```
