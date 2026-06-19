@@ -1,7 +1,14 @@
 # Backend (GPU box) requirements — installed alongside ComfyUI's own env.
 # ComfyUI + its custom nodes are installed separately (see setup.sh / README).
 
-websockets>=12.0          # TD <-> server transport (TCP)
+websockets>=12.0,<14      # browser <-> server transport + serves the HTML page.
+                          # PIN <14 IS LOAD-BEARING: server.py serves static/index.html
+                          # via a process_request(path, request_headers) hook returning a
+                          # (status, headers, body) tuple -- the LEGACY websockets API.
+                          # websockets 14 flipped websockets.serve to the new asyncio API
+                          # where process_request is (connection, request)->Response, which
+                          # would silently stop serving the page. Keep <14 unless you also
+                          # rewrite _serve_file in server.py for the new signature.
 websocket-client>=1.7.0   # server -> ComfyUI websocket API
 requests>=2.31.0          # ComfyUI HTTP API + LLM APIs
 numpy>=1.24               # ComfyUI bumps this to 2.x; numba>=0.61 / our deps cope
