@@ -1,0 +1,13 @@
+# Backend (GPU box) requirements — installed alongside ComfyUI's own env.
+# ComfyUI + its custom nodes are installed separately (see setup.sh / README).
+
+websockets>=12.0          # TD <-> server transport (TCP)
+websocket-client>=1.7.0   # server -> ComfyUI websocket API
+requests>=2.31.0          # ComfyUI HTTP API + LLM APIs
+numpy>=1.24
+faster-whisper>=1.0.0     # local STT on the GPU box
+webrtcvad>=2.0.10         # end-of-turn silence detection (optional; energy-gate fallback)
+
+# Notes:
+# - faster-whisper pulls ctranslate2; on CUDA it will use the GPU.
+# - No LLM SDKs required: brain.py calls OpenAI/Anthropic/compatible HTTP directly.
