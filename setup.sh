@@ -61,6 +61,7 @@ clone https://github.com/kijai/ComfyUI-MelBandRoFormer.git      # vocal isolatio
 clone https://github.com/Urabewe/ComfyUI-AudioTools.git         # AudioEnhancement / NormalizeLUFS
 clone https://github.com/melMass/comfy_mtb.git                  # Audio Duration (mtb)
 clone https://github.com/city96/ComfyUI-GGUF.git                # GGUF loaders (low-VRAM path)
+clone https://github.com/SethRobinson/comfyui-workflow-to-api-converter-endpoint.git  # adds POST /workflow/convert (editor->API, handles subgraphs)
 
 # install each node pack's python deps if present
 for d in */ ; do

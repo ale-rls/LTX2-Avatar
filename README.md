@@ -90,15 +90,27 @@ so a single exposed TCP port handles both the UI and the socket.
      author renamed some). `download_models.sh` handles the known deltas, but always
      `--probe` afterwards (step 4) and reconcile anything it flags.
 3. Start ComfyUI: `python main.py --listen 127.0.0.1 --port 8188`
-4. **Export the API-format workflow once** (this is required — the editor JSON
-   you uploaded is NOT what the API runs):
-   - ComfyUI → Settings → enable **Dev mode** → menu **Save (API Format)**
-   - save as `workflow_api.json` next to `server.py`
-   - verify node IDs survived the export:
-     ```
-     python workflow_adapter.py --probe workflow_api.json
-     ```
-     Fix any IDs it flags in `NODE_IDS` (subgraphs flatten + renumber on export).
+4. **Generate the API-format workflow once** (required — the editor JSON is NOT
+   what the API runs). The conversion needs ComfyUI's node registry, so it must
+   happen on this box with **all custom nodes installed** (`setup.sh` did that).
+   If a node pack is missing, the converted nodes lose their `class_type` and the
+   workflow is dead — both paths below guard against / detect that.
+
+   **Easiest — the converter endpoint** (cloned by `setup.sh`):
+   ```
+   python3 make_workflow_api.py user-inputs/<your-editor-workflow>.json
+   ```
+   This POSTs the editor JSON to ComfyUI's `/workflow/convert` (handles
+   subgraphs), writes `workflow_api.json`, and runs the probe automatically. It
+   aborts if any node comes back without a `class_type`.
+
+   **Or by hand:** ComfyUI → Settings → enable **Dev mode** → **Save (API
+   Format)** → save as `workflow_api.json` next to `server.py`, then verify:
+   ```
+   python3 workflow_adapter.py --probe workflow_api.json
+   ```
+   Either way, fix any IDs the probe flags in `NODE_IDS` (subgraphs flatten +
+   renumber on conversion).
 5. Upload a character image and a voice-reference clip into `ComfyUI/input/`
    (drag onto a LoadImage/LoadAudio node in the UI, or POST to `/upload/image`).
 6. Launch everything with **`./launch.sh`** — it starts Ollama (pulling `qwen3`
