@@ -4,9 +4,16 @@
 websockets>=12.0          # TD <-> server transport (TCP)
 websocket-client>=1.7.0   # server -> ComfyUI websocket API
 requests>=2.31.0          # ComfyUI HTTP API + LLM APIs
-numpy>=1.24
+numpy>=1.24               # ComfyUI bumps this to 2.x; numba>=0.61 / our deps cope
 faster-whisper>=1.0.0     # local STT on the GPU box
 webrtcvad>=2.0.10         # end-of-turn silence detection (optional; energy-gate fallback)
+onnxruntime>=1.20         # REQUIRED: server.py transcribes with vad_filter=True, whose
+                          # Silero VAD runs on onnxruntime. Without it the very first turn
+                          # dies with "Applying the VAD filter requires the onnxruntime
+                          # package". CPU build is plenty (the VAD model is tiny). Do NOT
+                          # rely on comfy_mtb's onnxruntime-gpu: it can target a different
+                          # CUDA major than torch (we hit libcudart.so.13 vs CUDA-12) and
+                          # then fails to import. setup.sh force-installs the CPU build.
 
 # Notes:
 # - faster-whisper pulls ctranslate2; on CUDA it will use the GPU.

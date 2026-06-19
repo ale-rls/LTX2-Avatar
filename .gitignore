@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+# per-deployment, generated from the ComfyUI UI export — not committed:
+workflow_api.json

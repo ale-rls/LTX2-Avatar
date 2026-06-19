@@ -70,10 +70,18 @@ and through an SSH tunnel. Same decision as FluxRT, for the same reason.
 
 1. `bash setup.sh` — installs ComfyUI and the custom-node packs the workflow
    needs (KJNodes, VideoHelperSuite, QwenTTS, MelBandRoFormer, AudioTools, mtb,
-   rgthree, Easy-Use, GGUF).
-2. Download models per the checklist `setup.sh` prints (Kijai LTX-2.3 + Gemma).
-   - **5090 (32GB):** GGUF UNet + Q2/Q4 Gemma, keep tiled VAE, 768×512–960×544.
-   - **H100/H200:** fp8/bf16 path, higher res; everything stays resident.
+   rgthree, Easy-Use, GGUF). It also **pins your pre-installed CUDA torch** so the
+   installs can't swap it, force-installs a CPU **onnxruntime** (faster-whisper's
+   VAD needs it), and re-adds the QwenTTS deps the resolver drops — see the gotchas
+   list below for why each of those exists.
+2. Download models with the companion script (verified HF repos + paths):
+   - **H100/H200:** `COMFY_DIR=~/ComfyUI MODE=fp8 ./download_models.sh` — the authored
+     fp8/bf16 path, higher res, everything stays resident.
+   - **5090 (32GB):** `COMFY_DIR=~/ComfyUI MODE=gguf ./download_models.sh` — GGUF UNet
+     + Q2/Q4 Gemma, keep tiled VAE, 768×512–960×544.
+   - The uploaded workflow's loader filenames don't all match public files 1:1 (the
+     author renamed some). `download_models.sh` handles the known deltas, but always
+     `--probe` afterwards (step 4) and reconcile anything it flags.
 3. Start ComfyUI: `python main.py --listen 127.0.0.1 --port 8188`
 4. **Export the API-format workflow once** (this is required — the editor JSON
    you uploaded is NOT what the API runs):
@@ -189,4 +197,34 @@ under your acceptable pause, or whether you also need a bigger card.
 - **Verify, don't guess** (FluxRT process lesson): the ComfyUI API surface used
   here (`/prompt`, `/history`, `/view`, `/ws`, `/upload/image`) is stable, but
   custom-node `class_type`s and widget names can change with updates — re-probe.
+
+### Install gotchas verified on a real clean install (baked into `setup.sh`)
+
+- **torch gets clobbered if you don't pin it.** ComfyUI's `requirements.txt` lists
+  `torch`/`torchvision`/`torchaudio` *unpinned*, and **ComfyUI-QwenTTS pins
+  `torch>=2.9.1`**. On a pod with a working CUDA torch, an unconstrained install
+  swaps it for a mismatched build and kills the GPU. `setup.sh` pins the
+  pre-installed versions via `PIP_CONSTRAINT` for every install. (QwenTTS's node
+  imports fine on older torch — verified on 2.4.1 — so the pin is safe.)
+- **`onnxruntime` is a hidden hard dep of the STT path.** `server.py` transcribes
+  with `vad_filter=True`, whose Silero VAD runs on onnxruntime; it's now in
+  `requirements.txt`. Worse, `comfy_mtb` pulls **`onnxruntime-gpu`** which can target
+  a different CUDA major than torch (we hit `libcudart.so.13` on a CUDA-12 box) and
+  then fails to import — `setup.sh` forces a CPU onnxruntime that always loads.
+- **QwenTTS deps get silently dropped.** Because of its `torch>=2.9.1` line, pip
+  aborts QwenTTS's whole `requirements.txt` under the torch pin and installs *none*
+  of it — losing `openai-whisper` + `tiktoken`. `setup.sh` re-adds them explicitly.
+- **numpy jumps to 2.x.** ComfyUI's deps upgrade numpy (1.26 → 2.x); fine for our
+  stack (numba ≥ 0.61, ctranslate2 ≥ 4.x cope), but it's what *broke the old
+  onnxruntime* import above — keep that in mind if a compiled dep starts misbehaving.
+- **Don't trust the editor JSON's embedded `extra.prompt`.** It can be a stale,
+  *different* graph (we found one missing `LoadImage`/`LoadAudio`/Qwen entirely).
+  Always export API format from the UI; `--probe` what you exported.
+- **Model filenames drift.** The uploaded graph references `*_KJ`-suffixed VAEs,
+  a `Q4_K_S` GGUF, a `spatial-upscaler-x2-1.1`, and a specifically-named vocoder that
+  don't all exist verbatim in public repos. `download_models.sh` pulls the verified
+  equivalents and renames where it can; reconcile the rest after `--probe`.
+- **24 GB (4090) is below the floor for the authored path.** fp8-22B (~22 GB) alone
+  nearly fills it; with fp8 Gemma it won't co-reside. Use the GGUF path on ≤32 GB, or
+  a bigger card for the fp8/bf16 path.
 ```
