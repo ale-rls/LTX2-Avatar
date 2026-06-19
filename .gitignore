@@ -1,4 +1,13 @@
 __pycache__/
 *.pyc
+.DS_Store
+
 # per-deployment, generated from the ComfyUI UI export — not committed:
 workflow_api.json
+
+# per-deployment character assets (voice ref audio + reference image) — not committed:
+user-inputs/
+*.wav
+*.mp3
+*.mp4
+*.mov
