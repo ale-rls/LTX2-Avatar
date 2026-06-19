@@ -1,35 +1,37 @@
 """
 server.py  (runs on the RunPod GPU box)
 ---------------------------------------
-WebSocket-over-TCP server that TouchDesigner connects to. One socket, turn-based.
-Carries over the FluxRT transport decision: plain WebSocket frames over TCP, so
-it works on RunPod (TCP-only) and through an SSH/VS Code tunnel. No WebRTC/UDP.
+WebSocket server for the LTX-2 talking avatar. Also serves the browser UI
+at GET / on the same port, so a single exposed TCP port handles both the
+HTML page and the WebSocket connection.
 
-PER TURN (the "few-second thinking pause" the show wants):
-  TD streams mic audio (binary PCM frames)  ->  this server
+PER TURN:
+  Browser streams mic audio (binary int16 PCM frames)  ->  this server
     -> VAD detects end-of-speech (silence)
     -> faster-whisper transcribes  (local on GPU box)
     -> Brain (LLM API, off-box) writes a short in-character reply
     -> patch the ComfyUI talking-avatar workflow (TTS text + scene + character)
     -> ComfyUI renders a lip-synced mp4 (progress streamed back as JSON)
-    -> server sends the mp4 bytes back to TD
-  TD writes mp4 to a temp file and plays it via a Movie File In TOP.
+    -> server sends the mp4 bytes back to the browser
+  Browser plays the mp4 full-screen.
 
 PROTOCOL (deliberately tiny):
-  TD -> server:
+  client -> server:
     BINARY frame  = a chunk of mic audio, 16-bit PCM mono @ AUDIO_SR
-    TEXT  {"type":"control","cmd":"start"|"stop"|"reset"|"barge_in"}
+    TEXT  {"type":"control","cmd":"stop"|"reset"}
     TEXT  {"type":"config","character":"alice","voice_ref":"alice_voice.wav",
-           "width":544,"height":960,"length":6}
-  server -> TD:
+           "character_image":"ref-img.png","width":960,"height":1280,"length":6}
+  server -> client:
     TEXT  {"type":"status","stage":"listening|transcribing|thinking|rendering",
-           "frac":0.0..1.0,"text":"..."}
+           "frac":0.0..1.0}
     TEXT  {"type":"transcript","text":"..."}      (what the person said)
     TEXT  {"type":"reply","text":"..."}           (what the avatar will say)
-    BINARY frame  = the finished mp4 (preceded by a TEXT 'clip_begin' with size)
+    TEXT  {"type":"clip_begin","bytes":N}         (mp4 is coming)
+    BINARY frame  = the finished mp4 bytes
 
 Run:
   python server.py --port 8080 --comfy-port 8188
+  Then open  http://<host>:8080/  in a browser.
 """
 
 from __future__ import annotations
@@ -41,6 +43,8 @@ import argparse
 import tempfile
 import wave
 import struct
+import pathlib
+from http import HTTPStatus
 
 import numpy as np
 import websockets                       # pip install websockets
@@ -48,6 +52,30 @@ import websockets                       # pip install websockets
 from brain import Brain
 from comfy_client import ComfyClient
 import workflow_adapter as wfa
+
+
+# ---- browser UI ----------------------------------------------------------
+_STATIC_DIR = pathlib.Path(__file__).parent / "static"
+
+
+async def _serve_file(path: str, request_headers):
+    """process_request hook: serve static files for non-WS HTTP GETs."""
+    # WebSocket upgrade requests have an "Upgrade" header — let those through.
+    if "Upgrade" in request_headers:
+        return None
+    if path in ("/", "/index.html"):
+        try:
+            body = (_STATIC_DIR / "index.html").read_bytes()
+        except FileNotFoundError:
+            return (HTTPStatus.NOT_FOUND, [], b"index.html not found")
+        return (
+            HTTPStatus.OK,
+            [("Content-Type", "text/html; charset=utf-8"),
+             ("Content-Length", str(len(body))),
+             ("Cache-Control", "no-cache")],
+            body,
+        )
+    return (HTTPStatus.NOT_FOUND, [], b"Not Found")
 
 
 # ---- audio / VAD config ------------------------------------------------------
@@ -305,9 +333,11 @@ async def main():
     whisper = load_whisper()
     backend = Backend(comfy, workflow_api, whisper)
 
-    print(f"[server] listening on 0.0.0.0:{args.port} (expose this TCP port)")
+    print(f"[server] listening on 0.0.0.0:{args.port}")
+    print(f"[server] browser UI → http://0.0.0.0:{args.port}/")
     async with websockets.serve(lambda ws: connection(ws, backend),
                                 "0.0.0.0", args.port,
+                                process_request=_serve_file,
                                 max_size=64 * 1024 * 1024,   # allow big mp4s
                                 ping_interval=20, ping_timeout=60):
         await asyncio.Future()

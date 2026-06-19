@@ -4,28 +4,34 @@ brain.py
 The avatar's "brain": turns a transcript of what the person said into a short
 spoken reply, in character.
 
-Provider-swappable by design (your requirement). Set LLM_PROVIDER and the
-matching API key in the environment; nothing else changes. Runs OFF the GPU box
-so it costs no VRAM and stays fast.
+Provider-swappable by design. Set LLM_PROVIDER and the matching env vars;
+nothing else changes. Runs on the GPU box alongside the rest of the stack.
 
-  LLM_PROVIDER = openai | anthropic | openai_compatible
-  - openai:            OPENAI_API_KEY,  LLM_MODEL (default gpt-4o-mini)
-  - anthropic:         ANTHROPIC_API_KEY, LLM_MODEL (default claude-3-5-haiku-latest)
-  - openai_compatible: LLM_BASE_URL (e.g. a local vLLM/Ollama OpenAI endpoint),
-                       LLM_API_KEY (any string if unused), LLM_MODEL
+  LLM_PROVIDER = qwen3 (default) | openai | anthropic | openai_compatible
 
-Uses each provider's HTTP API directly via `requests` so you don't have to pin
-SDK versions on the GPU box. (FluxRT lesson: depend on the real, stable API
-surface, not on a guessed SDK signature.)
+  qwen3 (default):
+    Qwen3 via an OpenAI-compatible endpoint (Ollama, vLLM, etc.).
+    LLM_BASE_URL   default: http://localhost:11434/v1   (Ollama)
+    LLM_MODEL      default: qwen3
+    LLM_API_KEY    default: ollama  (Ollama ignores it; set for vLLM/cloud)
+    Thinking blocks (<think>…</think>) are stripped automatically.
 
-LATENCY: reply length is the biggest lever you control in code. MAX_REPLY_WORDS
-caps it hard, because a shorter line -> shorter TTS -> shorter LTX clip ->
-shorter render. Keep the system prompt instructing brevity too.
+  openai:
+    OPENAI_API_KEY, LLM_MODEL (default gpt-4o-mini)
+
+  anthropic:
+    ANTHROPIC_API_KEY, LLM_MODEL (default claude-3-5-haiku-latest)
+
+  openai_compatible:
+    LLM_BASE_URL, LLM_API_KEY (any string), LLM_MODEL
+
+LATENCY: reply length is the biggest lever. MAX_REPLY_WORDS caps it hard
+because a shorter line → shorter TTS → shorter LTX clip → shorter render.
 """
 
 from __future__ import annotations
 import os
-import json
+import re
 import requests
 
 
@@ -40,10 +46,17 @@ DEFAULT_SYSTEM = (
 MAX_REPLY_WORDS = int(os.environ.get("MAX_REPLY_WORDS", "40"))
 TIMEOUT = float(os.environ.get("LLM_TIMEOUT", "30"))
 
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_thinking(text: str) -> str:
+    """Remove Qwen3 <think>…</think> blocks and tidy whitespace."""
+    return _THINK_RE.sub("", text).strip()
+
 
 class Brain:
     def __init__(self, system_prompt: str | None = None):
-        self.provider = os.environ.get("LLM_PROVIDER", "openai").lower()
+        self.provider = os.environ.get("LLM_PROVIDER", "qwen3").lower()
         self.system = system_prompt or os.environ.get("AVATAR_PERSONA", DEFAULT_SYSTEM)
         self.history: list[dict] = []   # [{role, content}, ...]
         self.max_turns = int(os.environ.get("LLM_HISTORY_TURNS", "8"))
@@ -53,14 +66,15 @@ class Brain:
         self.history.append({"role": "user", "content": user_text})
         self._trim()
         try:
-            if self.provider == "anthropic":
+            if self.provider in ("qwen3", "openai_compatible"):
+                base = os.environ.get("LLM_BASE_URL", "http://localhost:11434/v1")
+                key  = os.environ.get("LLM_API_KEY", "ollama")
+                out  = self._openai_compat(base=base, key=key)
+            elif self.provider == "anthropic":
                 out = self._anthropic()
-            elif self.provider == "openai_compatible":
-                out = self._openai(base=os.environ["LLM_BASE_URL"],
-                                   key=os.environ.get("LLM_API_KEY", "x"))
             else:  # openai
-                out = self._openai(base="https://api.openai.com/v1",
-                                   key=os.environ["OPENAI_API_KEY"])
+                out = self._openai_compat(base="https://api.openai.com/v1",
+                                          key=os.environ["OPENAI_API_KEY"])
         except Exception as e:
             # Never let the show hang on a brain error; say something neutral.
             print(f"[brain] error: {e}")
@@ -73,8 +87,9 @@ class Brain:
         self.history.clear()
 
     # -- providers ----------------------------------------------------------
-    def _openai(self, base: str, key: str) -> str:
-        model = os.environ.get("LLM_MODEL", "gpt-4o-mini")
+    def _openai_compat(self, base: str, key: str) -> str:
+        default_model = "qwen3" if self.provider == "qwen3" else "gpt-4o-mini"
+        model = os.environ.get("LLM_MODEL", default_model)
         msgs = [{"role": "system", "content": self.system}] + self.history
         r = requests.post(
             f"{base}/chat/completions",
@@ -85,7 +100,8 @@ class Brain:
             timeout=TIMEOUT,
         )
         r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"].strip()
+        text = r.json()["choices"][0]["message"]["content"].strip()
+        return _strip_thinking(text)
 
     def _anthropic(self) -> str:
         model = os.environ.get("LLM_MODEL", "claude-3-5-haiku-latest")

@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LTX-2 Avatar</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100%; height: 100%;
+  background: #000;
+  overflow: hidden;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+#avatar-video {
+  position: fixed;
+  inset: 0;
+  width: 100%; height: 100%;
+  object-fit: contain;
+}
+
+/* ---- status bar ---- */
+#status-bar {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  display: flex;
+  align-items: center;
+  padding: 10px 16px;
+  background: linear-gradient(transparent, rgba(0,0,0,0.75));
+  gap: 10px;
+  z-index: 10;
+  pointer-events: none;
+}
+#status-bar > * { pointer-events: auto; }
+
+#status-dot {
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  background: #555;
+  flex-shrink: 0;
+  transition: background 0.3s;
+}
+#status-dot.listening  { background: #22c55e; animation: blink 2s infinite; }
+#status-dot.thinking   { background: #eab308; }
+#status-dot.rendering  { background: #f97316; }
+#status-dot.playing    { background: #38bdf8; }
+#status-dot.error      { background: #ef4444; }
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.25; }
+}
+
+#status-label {
+  color: #ccc;
+  font-size: 13px;
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+#reply-preview {
+  color: #fff;
+  font-size: 13px;
+  flex: 1;
+  text-align: right;
+  opacity: 0.85;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-left: 16px;
+}
+
+#settings-btn {
+  background: none; border: none;
+  color: #666; font-size: 20px;
+  cursor: pointer; padding: 0 2px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+#settings-btn:hover { color: #fff; }
+
+/* ---- VU bar ---- */
+#vu-bar {
+  position: fixed;
+  bottom: 40px; left: 0;
+  width: 3px; height: 0;
+  background: #22c55e;
+  transition: height 0.05s linear;
+  z-index: 11;
+}
+
+/* ---- settings panel ---- */
+#panel {
+  position: fixed;
+  top: 0; right: -400px;
+  width: 360px; height: 100%;
+  background: rgba(16,16,16,0.96);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-left: 1px solid #2a2a2a;
+  transition: right 0.22s ease;
+  z-index: 30;
+  overflow-y: auto;
+  padding: 22px 20px 40px;
+}
+#panel.open { right: 0; }
+
+.panel-hd {
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.close-btn {
+  background: none; border: none;
+  color: #555; font-size: 20px;
+  cursor: pointer; line-height: 1;
+}
+.close-btn:hover { color: #fff; }
+
+.section-title {
+  color: #555;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin: 18px 0 10px;
+}
+
+.field { margin-bottom: 12px; }
+.field label {
+  display: block;
+  color: #777;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 5px;
+}
+.field input[type="text"],
+.field input[type="number"] {
+  width: 100%;
+  background: #1e1e1e;
+  border: 1px solid #333;
+  border-radius: 5px;
+  color: #fff;
+  font-size: 13px;
+  padding: 7px 10px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.field input:focus { border-color: #555; }
+
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.toggle-label {
+  color: #aaa;
+  font-size: 13px;
+}
+
+.switch {
+  position: relative; width: 36px; height: 20px;
+}
+.switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+.knob {
+  position: absolute; inset: 0;
+  background: #333; border-radius: 10px;
+  cursor: pointer; transition: background 0.2s;
+}
+.knob::before {
+  content: '';
+  position: absolute;
+  width: 14px; height: 14px;
+  left: 3px; top: 3px;
+  background: #aaa; border-radius: 50%;
+  transition: transform 0.2s, background 0.2s;
+}
+input:checked + .knob { background: #2563eb; }
+input:checked + .knob::before { transform: translateX(16px); background: #fff; }
+
+.sep { height: 1px; background: #222; margin: 18px 0; }
+
+.btn {
+  width: 100%; padding: 9px 12px;
+  border-radius: 6px; border: none;
+  font-size: 13px; font-weight: 500;
+  cursor: pointer; transition: opacity 0.15s, background 0.15s;
+}
+.btn:active { opacity: 0.75; }
+.btn.primary   { background: #2563eb; color: #fff; }
+.btn.secondary { background: #252525; color: #bbb; }
+.btn.danger    { background: #7f1d1d; color: #fca5a5; }
+.btn:disabled  { opacity: 0.35; cursor: not-allowed; }
+
+.row2-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
+
+.transcript-box {
+  background: #111;
+  border: 1px solid #2a2a2a;
+  border-radius: 5px;
+  padding: 8px 10px;
+  color: #666;
+  font-size: 12px;
+  line-height: 1.5;
+  min-height: 36px;
+  word-wrap: break-word;
+}
+.transcript-box.reply { color: #aaa; }
+</style>
+</head>
+<body>
+
+<video id="avatar-video" playsinline></video>
+
+<div id="status-bar">
+  <div id="status-dot"></div>
+  <div id="status-label">Disconnected</div>
+  <div id="reply-preview"></div>
+  <button id="settings-btn" title="Settings">⚙</button>
+</div>
+
+<div id="vu-bar"></div>
+
+<!-- Settings / control panel -->
+<div id="panel">
+  <div class="panel-hd">
+    LTX-2 Avatar
+    <button class="close-btn" id="close-btn">✕</button>
+  </div>
+
+  <div class="section-title">Connection</div>
+  <div class="field">
+    <label>Server WebSocket URL</label>
+    <input type="text" id="cfg-address">
+  </div>
+  <button class="btn primary" id="connect-btn">Connect</button>
+
+  <div class="sep"></div>
+
+  <div class="section-title">Character</div>
+  <div class="field">
+    <label>Character ID</label>
+    <input type="text" id="cfg-character" value="default">
+  </div>
+  <div class="field">
+    <label>Voice Reference File</label>
+    <input type="text" id="cfg-voiceref" value="B.wav">
+  </div>
+  <div class="field">
+    <label>Character Image File</label>
+    <input type="text" id="cfg-charimage" value="ref-img.png">
+  </div>
+
+  <div class="sep"></div>
+
+  <div class="section-title">Clip</div>
+  <div class="row2">
+    <div class="field"><label>Width</label><input type="number" id="cfg-clipw" value="960"></div>
+    <div class="field"><label>Height</label><input type="number" id="cfg-cliph" value="1280"></div>
+  </div>
+  <div class="field"><label>Length (seconds)</label><input type="number" id="cfg-cliplen" value="6" min="1" max="30"></div>
+
+  <div class="sep"></div>
+
+  <div class="section-title">Options</div>
+  <div class="toggle-row">
+    <span class="toggle-label">Fast Mode</span>
+    <label class="switch"><input type="checkbox" id="cfg-fastmode"><span class="knob"></span></label>
+  </div>
+
+  <div class="sep"></div>
+
+  <div class="section-title">Controls</div>
+  <div class="row2-btns">
+    <button class="btn secondary" id="reset-btn" disabled>Reset Brain</button>
+    <button class="btn secondary" id="endturn-btn" disabled>End Turn</button>
+  </div>
+
+  <div class="sep"></div>
+
+  <div class="section-title">Last Heard</div>
+  <div id="heard-box" class="transcript-box">—</div>
+
+  <div class="section-title" style="margin-top:14px;">Avatar Reply</div>
+  <div id="reply-box" class="transcript-box reply">—</div>
+</div>
+
+<script>
+// --------------------------------------------------------------------------
+// State
+// --------------------------------------------------------------------------
+let ws        = null;
+let audioCtx  = null;
+let micStream = null;
+let processor = null;
+let connected = false;
+
+let expecting      = 0;
+let clipChunks     = [];
+let clipReceived   = 0;
+let currentBlobUrl = null;
+
+// --------------------------------------------------------------------------
+// DOM refs
+// --------------------------------------------------------------------------
+const video      = document.getElementById('avatar-video');
+const dot        = document.getElementById('status-dot');
+const label      = document.getElementById('status-label');
+const replyPrev  = document.getElementById('reply-preview');
+const vuBar      = document.getElementById('vu-bar');
+const panel      = document.getElementById('panel');
+const connectBtn = document.getElementById('connect-btn');
+const resetBtn   = document.getElementById('reset-btn');
+const endturnBtn = document.getElementById('endturn-btn');
+const heardBox   = document.getElementById('heard-box');
+const replyBox   = document.getElementById('reply-box');
+
+// --------------------------------------------------------------------------
+// Default WS URL = same origin
+// --------------------------------------------------------------------------
+(function () {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  document.getElementById('cfg-address').value = `${proto}//${location.host}`;
+})();
+
+// --------------------------------------------------------------------------
+// Panel toggle
+// --------------------------------------------------------------------------
+document.getElementById('settings-btn').onclick = () => panel.classList.toggle('open');
+document.getElementById('close-btn').onclick    = () => panel.classList.remove('open');
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Escape') panel.classList.remove('open');
+});
+
+panel.classList.add('open');
+
+// --------------------------------------------------------------------------
+// Status helpers
+// --------------------------------------------------------------------------
+const STAGE_MAP = {
+  listening:    { text: 'Listening…',       cls: 'listening' },
+  transcribing: { text: 'Transcribing…',    cls: 'thinking'  },
+  thinking:     { text: 'Thinking…',        cls: 'thinking'  },
+  rendering:    { text: 'Rendering…',       cls: 'rendering' },
+  playing:      { text: 'Playing',          cls: 'playing'   },
+  busy:         { text: 'Busy — try later', cls: 'thinking'  },
+  configured:   { text: 'Configured',       cls: 'listening' },
+  error:        { text: 'Error',            cls: 'error'     },
+};
+
+function setStatus(stage, frac) {
+  const s = STAGE_MAP[stage] || { text: stage, cls: '' };
+  let txt = s.text;
+  if (frac != null) txt += ' ' + Math.round(frac * 100) + '%';
+  label.textContent = txt;
+  dot.className = s.cls;
+}
+
+function setDisconnected() {
+  label.textContent = 'Disconnected';
+  dot.className = '';
+}
+
+// --------------------------------------------------------------------------
+// Connect / disconnect
+// --------------------------------------------------------------------------
+connectBtn.onclick = () => connected ? disconnect() : doConnect();
+
+async function doConnect() {
+  const url = document.getElementById('cfg-address').value.trim();
+  if (!url) return;
+
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+  } catch (e) {
+    alert('Microphone access denied:\n' + e.message);
+    return;
+  }
+
+  connectBtn.textContent = 'Connecting…';
+  connectBtn.disabled = true;
+
+  ws = new WebSocket(url);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => {
+    connected = true;
+    connectBtn.textContent = 'Disconnect';
+    connectBtn.disabled = false;
+    connectBtn.classList.replace('primary', 'danger');
+    resetBtn.disabled = false;
+    endturnBtn.disabled = false;
+    sendConfig();
+    startMic();
+    setStatus('listening');
+  };
+
+  ws.onmessage = handleMessage;
+  ws.onclose   = onDisconnect;
+  ws.onerror   = () => {};
+}
+
+function disconnect() {
+  if (ws) { ws.close(); ws = null; }
+}
+
+function onDisconnect() {
+  stopMic();
+  connected = false;
+  connectBtn.textContent = 'Connect';
+  connectBtn.disabled = false;
+  connectBtn.classList.replace('danger', 'primary');
+  resetBtn.disabled = true;
+  endturnBtn.disabled = true;
+  setDisconnected();
+}
+
+// --------------------------------------------------------------------------
+// Config / control
+// --------------------------------------------------------------------------
+function getConfig() {
+  return {
+    type:            'config',
+    character:       document.getElementById('cfg-character').value.trim(),
+    voice_ref:       document.getElementById('cfg-voiceref').value.trim(),
+    character_image: document.getElementById('cfg-charimage').value.trim(),
+    width:  parseInt(document.getElementById('cfg-clipw').value)   || 960,
+    height: parseInt(document.getElementById('cfg-cliph').value)   || 1280,
+    length: parseInt(document.getElementById('cfg-cliplen').value) || 6,
+    fast:   document.getElementById('cfg-fastmode').checked,
+  };
+}
+
+function sendConfig() { wsSend(JSON.stringify(getConfig())); }
+
+resetBtn.onclick = () => {
+  wsSend(JSON.stringify({ type: 'control', cmd: 'reset' }));
+  heardBox.textContent  = '—';
+  replyBox.textContent  = '—';
+  replyPrev.textContent = '';
+};
+
+endturnBtn.onclick = () => wsSend(JSON.stringify({ type: 'control', cmd: 'stop' }));
+
+document.getElementById('cfg-fastmode').onchange = () => {
+  if (connected) wsSend(JSON.stringify({ type: 'config', fast: document.getElementById('cfg-fastmode').checked }));
+};
+
+function wsSend(data) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(data);
+}
+
+// --------------------------------------------------------------------------
+// Microphone — streams continuously; VAD on the server handles turn detection
+// --------------------------------------------------------------------------
+function startMic() {
+  if (!micStream) return;
+  try {
+    audioCtx = new AudioContext({ sampleRate: 16000 });
+  } catch (_) {
+    audioCtx = new AudioContext();
+  }
+
+  const source = audioCtx.createMediaStreamSource(micStream);
+  processor = audioCtx.createScriptProcessor(2048, 1, 1);
+  let vuSmooth = 0;
+
+  processor.onaudioprocess = (ev) => {
+    if (!connected || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+    const raw = ev.inputBuffer.getChannelData(0);
+    const samples = audioCtx.sampleRate !== 16000
+      ? resampleNearest(raw, audioCtx.sampleRate, 16000)
+      : raw;
+
+    // VU meter
+    let peak = 0;
+    for (let i = 0; i < samples.length; i++) {
+      const a = Math.abs(samples[i]);
+      if (a > peak) peak = a;
+    }
+    vuSmooth = vuSmooth * 0.65 + peak * 0.35;
+    vuBar.style.height = Math.min(200, Math.round(vuSmooth * 280)) + 'px';
+
+    ws.send(floatToInt16(samples).buffer);
+  };
+
+  source.connect(processor);
+  processor.connect(audioCtx.destination);
+}
+
+function stopMic() {
+  if (processor) { processor.disconnect(); processor = null; }
+  if (audioCtx)  { audioCtx.close();       audioCtx = null;  }
+  if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+  vuBar.style.height = '0';
+}
+
+function floatToInt16(f32) {
+  const out = new Int16Array(f32.length);
+  for (let i = 0; i < f32.length; i++) {
+    const s = Math.max(-1, Math.min(1, f32[i]));
+    out[i] = s < 0 ? s * 32768 : s * 32767;
+  }
+  return out;
+}
+
+function resampleNearest(samples, fromRate, toRate) {
+  const ratio  = fromRate / toRate;
+  const outLen = Math.floor(samples.length / ratio);
+  const out    = new Float32Array(outLen);
+  for (let i = 0; i < outLen; i++) out[i] = samples[Math.floor(i * ratio)];
+  return out;
+}
+
+// --------------------------------------------------------------------------
+// WebSocket messages
+// --------------------------------------------------------------------------
+function handleMessage(ev) {
+  if (typeof ev.data === 'string') {
+    let m;
+    try { m = JSON.parse(ev.data); } catch (_) { return; }
+
+    if (m.type === 'status') {
+      setStatus(m.stage, m.frac ?? null);
+    } else if (m.type === 'transcript') {
+      heardBox.textContent = m.text || '—';
+    } else if (m.type === 'reply') {
+      const t = m.text || '';
+      replyBox.textContent  = t || '—';
+      replyPrev.textContent = t;
+    } else if (m.type === 'clip_begin') {
+      expecting    = parseInt(m.bytes) || 0;
+      clipChunks   = [];
+      clipReceived = 0;
+    } else if (m.type === 'error') {
+      console.error('[server]', m.msg);
+      setStatus('error');
+    }
+
+  } else {
+    // Binary — mp4 data
+    clipChunks.push(new Uint8Array(ev.data));
+    clipReceived += ev.data.byteLength;
+    if (expecting > 0 && clipReceived >= expecting) playClip();
+  }
+}
+
+// --------------------------------------------------------------------------
+// Video playback
+// --------------------------------------------------------------------------
+function playClip() {
+  const blob = new Blob(clipChunks, { type: 'video/mp4' });
+  clipChunks   = [];
+  clipReceived = 0;
+  expecting    = 0;
+
+  const url = URL.createObjectURL(blob);
+  if (currentBlobUrl) URL.revokeObjectURL(currentBlobUrl);
+  currentBlobUrl = url;
+
+  video.src  = url;
+  video.loop = false;
+
+  video.play().catch(() => {
+    video.muted = true;
+    video.play();
+  });
+
+  // Hold on last frame between turns so the avatar stays visible
+  video.onended = () => {
+    video.currentTime = video.duration - 0.04;
+    video.pause();
+  };
+
+  setStatus('playing');
+}
+
+// Double-click to fullscreen
+document.body.addEventListener('dblclick', () => {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen().catch(() => {});
+  } else {
+    document.exitFullscreen();
+  }
+});
+</script>
+</body>
+</html>

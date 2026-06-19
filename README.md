@@ -1,12 +1,16 @@
-# LTX-2 Live Interactive Avatar — TouchDesigner ⇄ RunPod GPU
+# LTX-2 Live Interactive Avatar — Browser ⇄ RunPod GPU
 
 A voice-driven, LLM-brained talking avatar for live theater, rendered with the
-**LTX-2.3 talking-avatar ComfyUI workflow** (RuneXX, Qwen-TTS voice clone) on a
-rented RunPod GPU, controlled from **TouchDesigner**.
+**LTX-2.3 talking-avatar ComfyUI workflow** (RuneXX, Qwen3-TTS voice clone) on a
+rented RunPod GPU, driven entirely from a **web browser** — no TouchDesigner, no
+extra client. The page captures the mic, streams it to the GPU box, and plays the
+rendered avatar clips full-screen. The brain is **Qwen3**, running locally via
+**Ollama** on the same box.
 
-This is the conversational-avatar successor to the FluxRT-TD-TCP project. The
-transport layer and all the TouchDesigner gotchas carry over; the model layer is
-completely different (see below).
+> **This `browser` branch** replaces the original TouchDesigner client with a
+> self-contained web page that `server.py` serves at `GET /` on the same port as
+> the WebSocket. The legacy TD files (`td_avatar_ext.py`, `ws_callbacks.py`,
+> `param_exec_callbacks.py`) are still in the repo but unused here.
 
 ---
 
@@ -35,36 +39,37 @@ doesn't apply). The new hard part is render latency, addressed below.
 ## Architecture
 
 ```
-                    ┌──────────────────── RunPod GPU box (TCP-only) ─────────────────────┐
- TouchDesigner      │                                                                    │
- ┌────────────┐ WS  │  server.py                                                         │
- │ mic CHOP   │────▶│  ├─ VAD end-of-turn   ┌───────────┐                                 │
- │ (16k mono) │ TCP │  ├─ faster-whisper ──▶│  brain.py │ LLM API (off-box, swappable)    │
+                    ┌──────────────────── RunPod GPU box ────────────────────────────────┐
+ Browser            │                                                                    │
+ ┌────────────┐ WS  │  server.py  (serves the page at GET /, + WS on the same port)      │
+ │ mic        │────▶│  ├─ VAD end-of-turn   ┌───────────┐                                 │
+ │ (16k mono) │ TCP │  ├─ faster-whisper ──▶│  brain.py │──▶ Qwen3 via Ollama (localhost) │
  │            │     │  │   (STT, local)     └─────┬─────┘                                 │
  │ status/    │◀────│  │                          │ reply text                            │
  │ transcript │ WS  │  └─ workflow_adapter.patch( reply, character, voice ) ──┐           │
  │ reply      │     │                                                          ▼          │
  │            │     │     comfy_client ──▶ ComfyUI /prompt + ws ──▶ LTX-2.3 talking-avatar │
- │ Movie File │◀────│◀──── mp4 bytes ◀──── VHS_VideoCombine ◀───────────────────┘          │
- │ In TOP     │ WS  │                                                                    │
+ │ <video>    │◀────│◀──── mp4 bytes ◀──── VHS_VideoCombine ◀───────────────────┘          │
+ │ full-screen│ WS  │                                                                    │
  └────────────┘     └────────────────────────────────────────────────────────────────────┘
 ```
 
 **Transport:** plain WebSocket frames over TCP — works on RunPod (no UDP/WebRTC)
-and through an SSH tunnel. Same decision as FluxRT, for the same reason.
+and through an SSH tunnel. Same decision as FluxRT, for the same reason. The HTML
+page is served over HTTP on the *same* port (`websockets` `process_request` hook),
+so a single exposed TCP port handles both the UI and the socket.
 
 **Files**
 | file | runs where | does what |
 |---|---|---|
-| `server.py` | GPU box | TD-facing WS server; VAD turn detection; orchestrates STT→brain→render→clip |
-| `brain.py` | GPU box (calls out) | swappable LLM brain (OpenAI / Anthropic / OpenAI-compatible) |
+| `server.py` | GPU box | serves the browser UI + WS on one port; VAD turn detection; orchestrates STT→brain→render→clip |
+| `static/index.html` | browser | full-screen avatar UI: mic capture, WS client, clip playback, settings drawer |
+| `brain.py` | GPU box | swappable LLM brain — **Qwen3 via Ollama** by default (also OpenAI / Anthropic / OpenAI-compatible) |
 | `comfy_client.py` | GPU box | ComfyUI websocket+HTTP client; queue, progress, fetch mp4 |
 | `workflow_adapter.py` | GPU box | patches the live values onto the exact workflow node IDs |
-| `launch.sh` | GPU box | sets env vars, starts ComfyUI, waits for ready, starts server.py |
-| `setup.sh` | GPU box | installs ComfyUI + the exact custom nodes + model checklist |
-| `td_avatar_ext.py` | TouchDesigner | extension: ParameterManager, mic streaming, clip playback |
-| `ws_callbacks.py` | TouchDesigner | Web Server DAT callbacks → extension |
-| `param_exec_callbacks.py` | TouchDesigner | Parameter Execute DAT callbacks → extension |
+| `launch.sh` | GPU box | starts Ollama (pulls Qwen3), then ComfyUI, then server.py |
+| `setup.sh` | GPU box | installs ComfyUI + the exact custom nodes + Ollama + model checklist |
+| `td_avatar_ext.py`, `ws_callbacks.py`, `param_exec_callbacks.py` | (legacy) | original TouchDesigner client — unused on this branch |
 
 ---
 
@@ -96,78 +101,69 @@ and through an SSH tunnel. Same decision as FluxRT, for the same reason.
      Fix any IDs it flags in `NODE_IDS` (subgraphs flatten + renumber on export).
 5. Upload a character image and a voice-reference clip into `ComfyUI/input/`
    (drag onto a LoadImage/LoadAudio node in the UI, or POST to `/upload/image`).
-6. Launch the backend:
+6. Launch everything with **`./launch.sh`** — it starts Ollama (pulling `qwen3`
+   on first run, ~5 GB), waits for ComfyUI, then starts the backend. Or by hand:
    ```
-   export LLM_PROVIDER=openai          # or anthropic / openai_compatible
-   export OPENAI_API_KEY=sk-...
+   ollama serve &                      # brain endpoint on :11434
+   ollama pull qwen3                   # first run only
+   export LLM_PROVIDER=qwen3           # default; talks to localhost:11434
    export AVATAR_IMAGE=alice.png       # filename in ComfyUI/input/
    export AVATAR_VOICE_REF=alice.wav
    export AVATAR_PERSONA="You are Cassandra, a weary oracle. One or two short lines."
    python server.py --port 8080 --comfy-port 8188
    ```
+   To use a hosted brain instead of Ollama, set `LLM_PROVIDER=openai|anthropic|
+   openai_compatible` with the matching key/URL — see the header of `brain.py`.
 7. Expose TCP **8080** on RunPod, or tunnel it:
    `ssh -L 8080:127.0.0.1:8080 root@<pod-ssh-host> -p <ssh-port>`
+8. Open **`http://<host>:8080/`** (or `http://127.0.0.1:8080/` through the tunnel)
+   in a browser. Allow the mic, press **Connect**, and talk.
 
 ---
 
-## Setup (TouchDesigner)
+## Using the browser UI
 
-**Transport note — no WebSocket DAT (FluxRT lesson carried over):**
-The extension uses a **Web Server DAT + Web Render TOP** with an embedded relay
-HTML page, exactly like the FluxRT-TD-TCP project. The relay page's JavaScript
-owns the real WebSocket to the GPU server. TD's Python never touches the remote
-socket directly. This is what works reliably on RunPod TCP-only networking.
+`server.py` serves the page itself at `GET /` on the same port as the WebSocket —
+one exposed port does both. Open it and:
 
-Build a **Base COMP** containing:
+1. The **settings drawer** (⚙, open by default) pre-fills the server URL to the
+   page's own origin. Set the **Character ID**, **Voice Reference File**, and
+   **Character Image File** (filenames already in `ComfyUI/input/`), plus clip
+   **Width/Height/Length**.
+2. Press **Connect**. The browser asks for mic permission, opens the WebSocket,
+   sends the config, and starts streaming 16 kHz mono PCM continuously.
+3. **Just talk** — no push-to-talk. The server's VAD ends your turn on ~800 ms of
+   silence. After the thinking pause the avatar clip plays full-screen and holds
+   on its last frame until the next turn.
+4. **Controls** in the drawer: **Fast Mode** (applies live), **Reset Brain**
+   (clears conversation history), **End Turn** (force-end the current turn).
+5. **Double-click** anywhere to toggle fullscreen.
 
-| Operator | Type | Notes |
-|---|---|---|
-| `AvatarExt_logic` | Text DAT | paste `td_avatar_ext.py` |
-| `webserver_cbs` | Text DAT | paste `ws_callbacks.py`; set as Callbacks DAT on `web_server` |
-| `param_exec_cbs` | Text DAT | paste `param_exec_callbacks.py`; set as Callbacks DAT on `param_exec` |
-| `web_server` | Web Server DAT | Callbacks DAT = `webserver_cbs`; leave port blank (set by ext) |
-| `web_render` | Web Render TOP | URL left blank; ext fills it on Connect. Can be small/hidden. |
-| `param_exec` | Parameter Execute DAT | Callbacks DAT = `param_exec_cbs`; enable Custom + Value Change + Pulse |
-| `mic_out` | CHOP | Audio Device In → Resample CHOP (16000 Hz, 1 channel) → named `mic_out` |
-| `avatar_player` | Movie File In TOP | displays rendered clips |
+Status, the last transcript, and the avatar's reply show in the bottom bar and the
+drawer; a thin VU bar on the left edge confirms the mic is live.
 
-**Wiring:**
-- Create an **Execute DAT** inside the COMP, enable **Frame Start**:
-  ```python
-  def onFrameStart(frame):
-      parent().ext.AvatarExt.OnAudioCook()
-  ```
-  ← **nothing streams without this** (no CHOP wiring needed — reads `mic_out` directly each frame)
-- `param_exec` Parameter Execute DAT is wired automatically by the extension on init.
-  Its Callbacks DAT (`param_exec_cbs`) routes pulses and value changes to the extension.
-
-**Extension naming — must agree in three places (FluxRT lesson):**
-- class `AvatarExt`
-- COMP `Extension 1` par = `op('./AvatarExt_logic').module.AvatarExt(me)`
-- Promote Extension = On; callbacks reach it via `parent().ext.AvatarExt`
-
-**Custom pars on the COMP:** `Connect`(pulse) `Address`(str) `Character`(str)
-`Voiceref`(str) `Charimage`(str) `Clipw`/`Cliph`(int) `Cliplen`(int)
-`Fastmode`(toggle) `Pushtotalk`(toggle) plus read-only `Status`/`Heard`/`Reply`.
-
-Set `Address` to your server's WebSocket URL, press **Connect**, speak, stop —
-after the thinking pause the clip appears in `avatar_player`.
+> **Mic needs a secure context.** Browsers only allow `getUserMedia` on a secure
+> origin. `http://localhost` / `http://127.0.0.1` (e.g. via the SSH tunnel) counts
+> as secure, but a plain `http://<remote-ip>` does **not** — tunnel it, or put the
+> server behind HTTPS.
 
 ---
 
 ## Per-turn flow (what actually happens)
 
-1. TD streams int16 PCM @16k as WS binary while you talk.
+1. The browser streams int16 PCM @16k as WS binary, continuously.
 2. `server.py` runs VAD; ~800 ms of silence ends the turn.
-3. faster-whisper transcribes → `{"type":"transcript"}` to TD.
-4. `brain.py` returns a short in-character line → `{"type":"reply"}` to TD.
-5. `workflow_adapter.patch()` injects the line into Qwen-TTS `target_text` and
+3. faster-whisper transcribes → `{"type":"transcript"}` to the browser.
+4. `brain.py` asks **Qwen3 (via Ollama)** for a short in-character line and strips
+   any `<think>` block → `{"type":"reply"}` to the browser.
+5. `workflow_adapter.patch()` injects the line into Qwen3-TTS `target_text` and
    the LTX scene prompt, plus the character image + voice ref.
 6. `comfy_client.run_and_wait()` queues it and streams `{"type":"status",
-   "stage":"rendering","frac":…}` to TD during the wait.
-7. The finished mp4 is fetched from `VHS_VideoCombine` and sent to TD as one
-   binary payload (after a `clip_begin` header).
-8. TD writes it to a temp file and plays it in the Movie File In TOP.
+   "stage":"rendering","frac":…}` during the wait.
+7. The finished mp4 is fetched from `VHS_VideoCombine` and sent to the browser as
+   one binary payload (after a `clip_begin` header carrying the byte count).
+8. The browser assembles the bytes into a Blob and plays it in a full-screen
+   `<video>`, holding the last frame between turns.
 
 ---
 
@@ -183,14 +179,14 @@ after the thinking pause the clip appears in `avatar_player`.
    talking clip. Toggle three ways:
      - server default: `python server.py --fast`
      - env: `FAST_MODE=1`
-     - per session from TD: the `Fastmode` toggle (sent in the config message)
+     - live from the browser: the **Fast Mode** toggle in the settings drawer
    The rewire is topology-based (finds the two samplers/separators by class and
    link structure, not by ID), so it survives API-format re-export. It fails
    *loud* if the expected two-pass shape isn't found rather than shipping a
    broken graph.
 3. **Reply length.** `MAX_REPLY_WORDS` (default 40) caps the line → shorter TTS
    → shorter clip → faster render. Keep the persona terse.
-4. **Clip resolution / length.** `Clipw/Cliph/Cliplen` (and env `CLIP_*`).
+4. **Clip resolution / length.** Width/Height/Length in the drawer (and env `CLIP_*`).
 5. **Quantization.** GGUF/fp8 vs bf16 trades quality for speed.
 
 Suggested workflow: measure a fixed line at full quality first, then with
@@ -206,9 +202,13 @@ under your acceptable pause, or whether you also need a bigger card.
 - **VRAM thrash on 32GB** is the real latency killer, not framework overhead.
   If renders balloon between turns, you're reloading models → go bigger GPU or
   go GGUF.
-- **Qwen-TTS first run downloads weights**; do one warm-up render before a show.
+- **Qwen3-TTS first run downloads weights**; do one warm-up render before a show.
+- **Qwen3 (the brain) shares GPU VRAM with LTX-2.** Ollama loads it (~5 GB for the
+  8B default) on the same card. Fine on H100/H200; tight on ≤32 GB alongside the
+  fp8 path — use a smaller tag (`OLLAMA_MODEL=qwen3:4b ./launch.sh`), point
+  `LLM_BASE_URL` at an off-box endpoint, or use the GGUF LTX path if you hit OOM.
 - **One render at a time** per GPU (`self.busy`); barge-in mid-render is not
-  supported yet (TD can send `control/reset` to clear the brain between turns).
+  supported yet (use **Reset Brain** in the drawer to clear history between turns).
 - **Verify, don't guess** (FluxRT process lesson): the ComfyUI API surface used
   here (`/prompt`, `/history`, `/view`, `/ws`, `/upload/image`) is stable, but
   custom-node `class_type`s and widget names can change with updates — re-probe.

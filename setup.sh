@@ -94,6 +94,17 @@ if [ -f "$BACKEND_DIR/requirements.txt" ]; then
   $PY -m pip install -r "$BACKEND_DIR/requirements.txt"
 fi
 
+echo "==> 3b. LLM brain: Ollama (serves Qwen3 for the avatar's spoken replies)"
+# brain.py defaults to Qwen3 via an OpenAI-compatible endpoint on localhost:11434
+# -- i.e. Ollama on THIS box. We install the binary here; launch.sh starts the
+# server and pulls the model on first run. (Distinct from ComfyUI-QwenTTS above,
+# which is the Qwen3 *voice* node -- different model, different job.)
+if ! command -v ollama >/dev/null 2>&1; then
+  curl -fsSL https://ollama.com/install.sh | sh
+else
+  echo "   ollama already installed: $(ollama --version 2>/dev/null | head -1)"
+fi
+
 cat <<'EOF'
 
 ==> 4. MODELS — large files, into ComfyUI/models/.
@@ -142,17 +153,20 @@ cat <<'EOF'
     #   NB: do NOT reuse the editor .json's embedded extra.prompt as the API file --
     #   it is a stale/different graph (we found it missing LoadImage/Qwen entirely).
 
-    # Backend (set provider + key first)
-    export LLM_PROVIDER=openai          # or anthropic / openai_compatible
-    export OPENAI_API_KEY=sk-...        # matching key
+    # Brain: Qwen3 on this box via Ollama
+    ollama serve &                      # if not already running
+    ollama pull qwen3                   # first run only (~5GB; cached after)
+    export LLM_PROVIDER=qwen3           # default; talks to localhost:11434
     export AVATAR_IMAGE=alice.png       # filename you uploaded to ComfyUI/input/
     export AVATAR_VOICE_REF=alice.wav   # filename you uploaded to ComfyUI/input/
     cd  <this repo>                     # where server.py lives
     python server.py --port 8080 --comfy-port 8188
 
+    # Easiest of all: just run  ./launch.sh  (starts Ollama + ComfyUI + backend).
+
 ==> 6. EXPOSE TCP 8080 on RunPod (HTTP/TCP port), or SSH-tunnel it:
     ssh -L 8080:127.0.0.1:8080 root@<pod-ssh-host> -p <ssh-port>
-    Then point TouchDesigner at ws://127.0.0.1:8080  (127.0.0.1, not localhost).
+    Then open  http://127.0.0.1:8080/  in a browser -- the avatar runs full-screen.
 EOF
 
 echo "==> setup.sh done."
