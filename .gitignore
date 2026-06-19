@@ -2,10 +2,12 @@ __pycache__/
 *.pyc
 .DS_Store
 
-# per-deployment, generated from the ComfyUI UI export — not committed:
-workflow_api.json
+# NOTE: workflow_api.json IS committed — it's the known-good converted API graph for this
+# project (node IDs match workflow_adapter.NODE_IDS, model paths normalized for Linux).
+# Regenerate with `python3 make_workflow_api.py` only if the editor workflow changes.
+*.bak
 
-# per-deployment character assets (voice ref audio + reference image) — not committed:
+# per-deployment character assets (voice ref audio + reference image) — NOT committed:
 user-inputs/
 *.wav
 *.mp3

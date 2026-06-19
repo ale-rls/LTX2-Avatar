@@ -15,7 +15,18 @@ BACKEND_DIR="${BACKEND_DIR:-$SCRIPT_DIR}"
 # Single-purpose GPU box: let pip write to the system env without the PEP-668 nag.
 export PIP_BREAK_SYSTEM_PACKAGES=1
 
-echo "==> 0. Pin the pre-installed torch so the installs below can't swap it"
+echo "==> 0. System packages the installs below assume (verified missing on a clean pod)"
+# zstd: Ollama's installer now unpacks a .tar.zst and ABORTS without it -- and under
+#   `set -e` that single failure stops this whole script at the Ollama step (everything
+#   before it already succeeded). sox + libsox-fmt-all: ComfyUI-QwenTTS's vendored
+#   qwen_tts imports `sox` at render time. pciutils + lshw: let Ollama detect the GPU
+#   cleanly (it ships its own CUDA runner regardless).
+if command -v apt-get >/dev/null 2>&1; then
+  apt-get update -qq || true
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq zstd sox libsox-fmt-all pciutils lshw || true
+fi
+
+echo "==> 0b. Pin the pre-installed torch so the installs below can't swap it"
 # Hard lesson: ComfyUI's requirements.txt lists torch/torchvision/torchaudio UNPINNED,
 # and some custom nodes (notably ComfyUI-QwenTTS) demand torch>=2.9.1. On a pod that
 # already ships a working CUDA torch, an unconstrained resolve will cheerfully replace
@@ -77,7 +88,18 @@ echo "==> 2b. Re-add QwenTTS python deps the resolver silently dropped"
 # NONE of it -- quietly losing openai-whisper + tiktoken (its other deps are already
 # present via ComfyUI/transformers). The Qwen3-TTS node itself imports fine on older
 # torch (verified on torch 2.4.1), so we just add the two missing pure-python deps.
-$PY -m pip install openai-whisper tiktoken || true
+# Plus two breakages the requirements file doesn't cover (verified on a clean H100):
+#   1) the vendored qwen_tts imports `sox` (pip pkg here + the sox CLI from step 0); and
+#   2) its 12Hz tokenizer decorates forward() with `@check_model_inputs()`, but transformers
+#      (4.57.x AND 5.x) define check_model_inputs(func) as a DIRECT decorator -> TypeError.
+#      Drop the parens to match transformers' own gemma3 usage.
+$PY -m pip install openai-whisper tiktoken sox || true
+QT_V2="$COMFY_DIR/custom_nodes/ComfyUI-QwenTTS/qwen_tts/core/tokenizer_12hz/modeling_qwen3_tts_tokenizer_v2.py"
+[ -f "$QT_V2" ] && sed -i 's/@check_model_inputs()/@check_model_inputs/g' "$QT_V2"
+# Pin transformers to QwenTTS's stated floor. ComfyUI pulls 5.x but only needs >=4.50.3,
+# does not use check_model_inputs, and keeps Gemma3 (the LTX text encoder) in 4.57 -- so
+# the LTX path is unaffected (verified by a full render). PIP_CONSTRAINT (step 0b) keeps torch.
+$PY -m pip install "transformers==4.57.1" || true
 
 echo "==> 2c. Guarantee an importable onnxruntime (faster-whisper VAD depends on it)"
 # comfy_mtb pulls onnxruntime-gpu, which may target a different CUDA major than torch

@@ -43,6 +43,15 @@ get Kijai/LTX2.3_comfy text_encoders/ltx-2.3_text_projection_bf16.safetensors "$
 # Spatial upscaler: only x2-1.0 is public; the workflow names x2-1.1. Needed ONLY when
 # you do NOT run --fast (fast mode orphans the upscaler branch entirely).
 get Lightricks/LTX-2 ltx-2-spatial-upscaler-x2-1.0.safetensors "$M/latent_upscale_models/ltx-2-spatial-upscaler-x2-1.0.safetensors"
+# ...and expose it under the 1.1 name the graph's loader widget asks for (a symlink, since
+# only x2-1.0 is public). LatentUpscaleModelLoader reads models/latent_upscale_models/.
+ln -sf ltx-2-spatial-upscaler-x2-1.0.safetensors \
+   "$M/latent_upscale_models/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
+
+# MelBandRoformer: this talking-avatar graph runs vocal isolation on the AUDIO path every
+# turn (node 1937 stays upstream of the output after API conversion) -- NOT optional here.
+# MelBandRoFormerModelLoader reads models/diffusion_models/ (not a 'melband' folder).
+get Kijai/MelBandRoFormer_comfy MelBandRoformer_fp16.safetensors "$M/diffusion_models/MelBandRoformer_fp16.safetensors"
 
 if [ "$MODE" = "fp8" ]; then
   echo "==> fp8 / bf16 path (H100/H200 -- the authored graph, everything resident)"
@@ -71,7 +80,8 @@ cat <<EOF
     - audio vocoder: workflow names 'ltx-av-step-1751000_vocoder_24K.safetensors'.
       Closest public is Lightricks/LTX-2 :: vocoder/diffusion_pytorch_model.safetensors
       -- confirm the loader's expected folder/name before placing.
-    - MelBandRoformer_fp16.safetensors (optional vocal-isolation branch).
+    - (MelBandRoformer_fp16.safetensors is now auto-fetched above -- it is on the active
+      audio path for this graph, not optional.)
     - Qwen3-TTS weights: auto-download on first run of the AILab_Qwen3TTSVoiceClone node.
 
 Next: export workflow_api.json from the UI, then

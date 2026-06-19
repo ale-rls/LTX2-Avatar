@@ -214,7 +214,8 @@ under your acceptable pause, or whether you also need a bigger card.
 - **VRAM thrash on 32GB** is the real latency killer, not framework overhead.
   If renders balloon between turns, you're reloading models → go bigger GPU or
   go GGUF.
-- **Qwen3-TTS first run downloads weights**; do one warm-up render before a show.
+- **Qwen3-TTS first run downloads weights**; do one warm-up render before a show —
+  run `python3 warmup_render.py` (fires one turn through the real render path).
 - **Qwen3 (the brain) shares GPU VRAM with LTX-2.** Ollama loads it (~5 GB for the
   8B default) on the same card. Fine on H100/H200; tight on ≤32 GB alongside the
   fp8 path — use a smaller tag (`OLLAMA_MODEL=qwen3:4b ./launch.sh`), point
@@ -254,3 +255,44 @@ under your acceptable pause, or whether you also need a bigger card.
 - **24 GB (4090) is below the floor for the authored path.** fp8-22B (~22 GB) alone
   nearly fills it; with fp8 Gemma it won't co-reside. Use the GGUF path on ≤32 GB, or
   a bigger card for the fp8/bf16 path.
+
+### More gotchas, verified on a clean H100 80GB bring-up (2026-06)
+
+A full browser-branch bring-up on a fresh H100 hit four more breakages past the list
+above — all now handled in `setup.sh` / `download_models.sh`, recorded here so the next
+run recognizes them fast. (The fp8 path itself works end-to-end on the H100: a `--fast`
+warm-up render produced a lip-synced clip in ~77 s including first-run TTS download.)
+
+- **Ollama's installer needs `zstd`.** It now unpacks a `.tar.zst`; without `zstd` it
+  aborts (*"This version requires zstd for extraction"*), and under `set -e` that single
+  failure stops `setup.sh` at the Ollama step (everything before it already succeeded).
+  `setup.sh` apt-installs `zstd` first (plus `pciutils`/`lshw` so Ollama cleanly detects
+  the GPU — it bundles its own CUDA runner regardless).
+- **QwenTTS breaks in two ways its `requirements.txt` doesn't cover:**
+  1. **`sox` is a hidden hard dep.** The vendored `qwen_tts/.../vq/speech_vq.py` does
+     `import sox`, which isn't in its requirements → the first TTS render dies. The node
+     reports this as *"qwen_tts is not available … cannot import name
+     'Qwen3TTSTokenizerV1Config'"* — a catch-all that **hides the real cause**; read the
+     full import traceback. Needs both the `sox` **CLI** (`apt install sox libsox-fmt-all`)
+     and the `sox` **pip** package.
+  2. **transformers decorator drift.** Its 12 Hz tokenizer decorates `forward` with
+     `@check_model_inputs()`, but transformers (4.57.x *and* 5.x) define
+     `check_model_inputs(func)` as a **direct** decorator → `TypeError: … missing 1
+     required positional argument: 'func'`. Fix = drop the parens (`@check_model_inputs`,
+     exactly how transformers' own gemma3 model uses it). `setup.sh` seds this and pins
+     `transformers==4.57.1` — QwenTTS's stated floor; ComfyUI only needs `>=4.50.3`,
+     doesn't use `check_model_inputs`, and keeps Gemma3 (the LTX text encoder), so the
+     LTX path is unaffected (verified by a full render).
+- **MelBandRoFormer is on the live audio path here, not optional.** API conversion keeps
+  `MelBandRoFormerModelLoader` (node 1937) upstream of the output, so it runs every turn.
+  It loads from **`models/diffusion_models/`** (not a `melband` folder) — `download_models.sh`
+  now fetches `MelBandRoformer_fp16.safetensors` from `Kijai/MelBandRoFormer_comfy`.
+- **Windows widget paths survive conversion and fail on Linux.** This editor JSON was
+  saved on Windows, so active loaders came through with back-slashed sub-paths — e.g.
+  `LTXVideo\v2\…fp8_scaled.safetensors` (UNETLoader), `vae_approx\taeltx2_3…`,
+  `MelBandRoformer\…`. ComfyUI's Linux `get_filename_list` never emits those, so the
+  prompt fails validation even with the file on disk. After `--probe`, rewrite each
+  model-file widget in `workflow_api.json` to the value the node's `/object_info` lists
+  (forward-slash sub-path or bare basename). The spatial upscaler is a separate
+  name-only miss (`x2-1.1` wanted, only `x2-1.0` public) → symlink it in
+  `models/latent_upscale_models/`; `--fast` orphans that branch anyway.
